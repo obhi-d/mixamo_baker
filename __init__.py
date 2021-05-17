@@ -1,13 +1,30 @@
+
+bl_info = {
+    "name": "Mixamo Animation Baker",
+    "author": "Abhishek Dey",
+    "version": (1, 0, 0),
+    "blender": (2, 80, 0),
+    "location": "3D View > UI (Right Panel) > Mixamo Animation Tab",
+    "description": ("Script to import Mixamo Animations into Armature for UE export"),
+    "warning": "",  # used for warning icon and text in addons panel
+    "wiki_url": "https://github.com/obhi-d/mixamo_import/wiki",
+    "tracker_url": "https://github.com/enziop/mixamo_import/issues" ,
+    "category": "Animation"
+}
+
 import bpy
 from bpy.types import Operator, AddonPreferences
 from bpy.props import StringProperty, IntProperty, BoolProperty
+from . import mixamo_baker
 
-
-class MixamoBakerPreferences(AddonPreferences):
+class MixamoBakerPreferences(bpy.types.AddonPreferences):
     # this must match the add-on name, use '__package__'
     # when defining this in a submodule of a python package.
     bl_idname = __name__
 
+    hips_to_root: bpy.props.BoolProperty(
+        name="Bake Hips To Root",
+        default=True)
     sk_path: StringProperty(
         name="Skeleton Template",
         subtype='FILE_PATH',
@@ -24,7 +41,8 @@ class MixamoBakerPreferences(AddonPreferences):
     def draw(self, context):
         layout = self.layout
         box = layout.box()
-        box.row().prop(self, "filepath")
+        box.row().prop(self, "sk_path")
+        box.row().prop(self, "hips_to_root")
         box.row().prop(self, "inpath")
         box.row().prop(self, "outpath")
 
@@ -46,7 +64,7 @@ class OBJECT_OT_RenameToMixamo(bpy.types.Operator):
 
 
 class OBJECT_OT_RenameToUnreal(bpy.types.Operator):
-    bl_idname = "mixamo_baker.rename_to_mixamo"
+    bl_idname = "mixamo_baker.rename_to_unreal"
     bl_label = "To Unreal Armature"
     bl_description = "Renames bones from mixamo to unreal"
 
@@ -68,7 +86,11 @@ class OBJECT_OT_BatchBake(bpy.types.Operator):
     def execute(self, context):
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
-        mixamo_baker.process_batch(addon_prefs.inpath, addon_prefs.outpath, addon_prefs.sk_path)
+        numfiles = mixamo_baker.process_batch(addon_prefs.inpath, addon_prefs.outpath, addon_prefs.sk_path, addon_prefs.hips_to_root)
+        if numfiles == -1:
+            self.report({'ERROR_INVALID_INPUT'}, 'Error: Not all files could be converted, look in console for more information')
+            return{ 'CANCELLED'}
+        self.report({'INFO'}, "%d files converted" % numfiles)
         return{ 'FINISHED'}
 
 
@@ -78,32 +100,41 @@ class MIXAMOBAKER_VIEW_3D_PT_panel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Mixamo"
+    bl_description = "..."
+
     def draw(self, context):
         layout = self.layout
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
         box = layout.box()
         # Options for how to do the conversion
-        box.row().prop(addon_prefs.sk_path)
-        box.row().prop(addon_prefs.inpath)
-        box.row().prop(addon_prefs.outpath)
+        box.row().prop(addon_prefs, "sk_path")
+        box.row().prop(addon_prefs, "hips_to_root")
+        box.row().prop(addon_prefs, "inpath")
+        box.row().prop(addon_prefs, "outpath")
+        box.row().operator("mixamo_baker.rename_to_mixamo")
+        box.row().operator("mixamo_baker.rename_to_unreal")
         box.row().operator("mixamo_baker.bake")
 
 classes = (
-    MixamoBakerPreferences,
     OBJECT_OT_RenameToUnreal,
     OBJECT_OT_RenameToMixamo,
+    OBJECT_OT_BatchBake,
     MIXAMOBAKER_VIEW_3D_PT_panel,
 )
 #register, unregister = bpy.utils.register_classes_factory(classes)
 
 def register():
+    bpy.utils.register_class(MixamoBakerPreferences)
     for cls in classes:
+        print("Registering: " + cls.bl_idname)
         bpy.utils.register_class(cls)
 
 def unregister():
     for cls in classes:
+        print("Unregistering: " + cls.bl_idname)
         bpy.utils.unregister_class(cls)
+    bpy.utils.unregister_class(MixamoBakerPreferences)
 
 if __name__ == "__main__":
     register()

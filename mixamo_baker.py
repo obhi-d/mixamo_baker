@@ -101,13 +101,32 @@ def rename_bone(s, names, dst):
             bone.name = dst
     
 
-def bake_bones(src_armature, dst_armature, act_name):
+def bake_bones(src_armature, dst_armature, act_name, hips_to_root):
 
     frame_range = src_armature.animation_data.action.frame_range
 
+    bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.select_all(action='DESELECT')
     dst_armature.select_set(True)
     bpy.context.view_layer.objects.active = dst_armature
+        
+    if hips_to_root:
+        hips = None
+        for hipname in ('Hips', 'mixamorig:Hips', 'mixamorig_Hips', 'pelvis'):
+            hips = src_armature.pose.bones.get(hipname)
+            if hips != None:
+                break
+
+        if hips == None:
+            log.warning('WARNING I have not found any hip bone for %s and the conversion is stopping here',  root.pose.bones)
+            raise ValueError("no hips found")
+        
+        c = dst_armature.constraints.new(type='COPY_TRANSFORMS')
+        c.target = dst_armature
+        c.subtarget = hips.name
+        bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
+                     clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'OBJECT'})
+
     bpy.ops.object.mode_set(mode='POSE')
 
     process_later = []
@@ -115,21 +134,54 @@ def bake_bones(src_armature, dst_armature, act_name):
         src = src_armature.pose.bones.get(dst.name)
         if src:
             dst.bone.select = True
-            dst_armature.data.bones.active = dst
-            c = dst.constraints.new(type='COPY_TRANSFORM')
+            dst_armature.data.bones.active = dst.bone
+            c = dst.constraints.new(type='COPY_TRANSFORMS')
             c.target = src_armature
-            c.subtarget = src
+            c.subtarget = src.name
             bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
                      clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'POSE'})
+            dst.bone.select = False
         elif dst.bone.use_deform:
             process_later.append(dst)
 
     for dst in process_later:
+        dst.bone.select = True
+        dst_armature.data.bones.active = dst.bone
         bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
                      clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'POSE'})
+        dst.bone.select = False
 
-    dst_armature.animation_data.action.name = act_name
     bpy.ops.object.mode_set(mode='OBJECT')
+    dst_armature.select_set(True)
+    bpy.context.view_layer.objects.active = dst_armature
+    dst_armature.animation_data.action.name = act_name
+    
+def clear_keyframes(dst_armature):
+    
+    bpy.ops.object.select_all(action='DESELECT')
+    dst_armature.select_set(False)
+    bpy.context.view_layer.objects.active = dst_armature
+    
+    old_type = bpy.context.area.type
+        
+    bpy.context.area.type = 'DOPESHEET_EDITOR'
+    bpy.ops.object.mode_set(mode='POSE')
+        
+    for fc in dst_armature.animation_data.action.fcurves:
+        fc.select = True
+        key_count = 0
+        for x in fc.keyframe_points:
+            x.select_control_point=True
+            key_count += 1
+        if key_count > 1:
+            bpy.ops.action.clean(channels=False)
+        for x in fc.keyframe_points:
+            x.select_control_point=False
+        fc.select = False
+
+    bpy.context.area.type = old_type
+    bpy.ops.object.mode_set(mode='OBJECT')
+    
 
 def get_dst_armature(templ_path):
 
@@ -150,12 +202,14 @@ def get_src_armature():
         if obj.type == 'ARMATURE':
             return obj
 
-def process_batch(src_dir, dst_dir, templ_path):
+def process_batch(src_dir, dst_dir, templ_path, hips_to_root):
 
     source_dir = Path(src_dir)
 
+    numfiles = 0
+    
     bpy.context.scene.unit_settings.system = 'METRIC'
-    bpy.context.scene.unit_settings.scale_length = 1
+    bpy.context.scene.unit_settings.scale_length = .01
 
     for file in source_dir.iterdir():
         if not file.is_file():
@@ -224,8 +278,13 @@ def process_batch(src_dir, dst_dir, templ_path):
         act_name = file.stem.replace(' ', '_')
 
         # Bake
-        bake_bones(src_armature, dst_armature, act_name)
-
+        bake_bones(src_armature, dst_armature, act_name, hips_to_root)
+        
+        bpy.ops.object.select_all(action='SELECT')
+        dst_armature.select_set(False)
+        bpy.context.view_layer.objects.active = src_armature
+        bpy.ops.object.delete(use_global=True)
+        
         # remove all datablocks
         for mesh in bpy.data.meshes:
             bpy.data.meshes.remove(mesh, do_unlink=True)
@@ -234,12 +293,15 @@ def process_batch(src_dir, dst_dir, templ_path):
 
         for action in bpy.data.actions:
             if action != dst_armature.animation_data.action:
+                print('Deleting Action: ' + action.name)
                 bpy.data.actions.remove(action, do_unlink=True)
         for armature in bpy.data.armatures:
-            if armature != dst_armature:
+            if armature != dst_armature.data:
                 bpy.data.armatures.remove(armature, do_unlink=True)
-
+                   
+        clear_keyframes(dst_armature)
         # Export
+        dst_dir = Path(dst_dir)
         output_file = dst_dir.joinpath(file.stem + ".fbx")
         bpy.ops.export_scene.fbx(filepath=str(output_file),
                                  use_selection=False,
@@ -247,7 +309,8 @@ def process_batch(src_dir, dst_dir, templ_path):
                                  add_leaf_bones=False,
                                  axis_forward='-Z',
                                  axis_up='Y',
-                                 mesh_smooth_type='FACE')
+                                 mesh_smooth_type='FACE',
+                                 use_armature_deform_only=True)
 
         # Cleanup
         bpy.ops.object.select_all(action='SELECT')

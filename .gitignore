@@ -4,3 +4,4 @@
 
 /.vs/ProjectSettings.json
 *.sqlite
+/__pycache__
