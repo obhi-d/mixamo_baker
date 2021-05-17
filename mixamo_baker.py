@@ -163,7 +163,7 @@ def bake_hips(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, 
     if hips_to_root:
         bpy.ops.object.mode_set(mode='OBJECT')
         dst_armature.rotation_mode = 'QUATERNION'
-
+        hips.rotation_mode = 'QUATERNION'
         if use_z:        
             c_rootbaker_copy_z_loc = dst_armature.constraints.new(type='COPY_LOCATION')
             c_rootbaker_copy_z_loc.target = src_armature
@@ -199,40 +199,55 @@ def bake_hips(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, 
                          clear_constraints=True, clear_parents=False, use_current_action=False, bake_types={'OBJECT'})
                 
 
-def bake_bones(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground):
+def bake_bones(src_armature, dst_armature, act_name, cbones, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground):
 
     frame_range = src_armature.animation_data.action.frame_range
     
+
+    bpy.ops.object.select_all(action='DESELECT')
+    dst_armature.select_set(True)
+    bpy.context.view_layer.objects.active = dst_armature
+
     bake_hips(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground, frame_range)
     
     bpy.ops.object.mode_set(mode='POSE')
     process_later = []
+        
+    src_armature.rotation_mode = 'QUATERNION'
+    for dst in dst_armature.pose.bones:
+        dst.bone.select = False
+        dst.rotation_mode = 'QUATERNION'
+    for src in src_armature.pose.bones:
+        src.bone.select = False
+        src.rotation_mode = 'QUATERNION'
 
     for dst in dst_armature.pose.bones:
-        src = src_armature.pose.bones.get(dst.name)
-        if src:
-            dst.bone.select = True
-            dst_armature.data.bones.active = dst.bone
-            dst.rotation_mode = 'QUATERNION'
-            c = dst.constraints.new(type='COPY_LOCATION')
-            c.target = src_armature
-            c.subtarget = src.name
+        if dst.bone.use_deform:
+            src = src_armature.pose.bones.get(dst.name)
+            if src and not (dst.name in cbones):
+                dst.bone.select = True
+                dst_armature.data.bones.active = dst.bone
+                dst.rotation_mode = 'QUATERNION'
+                src.rotation_mode = 'QUATERNION'
+                c = dst.constraints.new(type='COPY_LOCATION')
+                c.target = src_armature
+                c.subtarget = src.name
 
-            c = dst.constraints.new(type='COPY_ROTATION')
-            c.target = src_armature
-            c.subtarget = src.name
-
-            bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
-                        clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'POSE'})
+                c = dst.constraints.new(type='COPY_ROTATION')
+                c.target = src_armature
+                c.subtarget = src.name
+                
+                bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
+                            clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'POSE'})
             
-            dst.bone.select = False
-        elif dst.bone.use_deform:
-            process_later.append(dst)
+                dst.bone.select = False
+            else:
+                process_later.append(dst)
 
     for dst in process_later:
         dst.bone.select = True
-        dst.rotation_mode = 'QUATERNION'
         dst_armature.data.bones.active = dst.bone
+        dst.rotation_mode = 'QUATERNION'
         bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
                      clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'POSE'})
         dst.bone.select = False
@@ -242,8 +257,8 @@ def bake_bones(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y,
     dst_armature.select_set(True)
     bpy.context.view_layer.objects.active = dst_armature
     dst_armature.animation_data.action.name = act_name
-    
     quaternion_cleanup(dst_armature)
+
 
 def clear_keyframes(dst_armature):
     
@@ -291,14 +306,14 @@ def get_src_armature():
         if obj.type == 'ARMATURE':
             return obj
 
-def process_batch(src_dir, dst_dir, templ_path, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground):
+def process_batch(src_dir, dst_dir, templ_path, cbones, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground, scale):
 
     source_dir = Path(src_dir)
 
     numfiles = 0
     
     bpy.context.scene.unit_settings.system = 'METRIC'
-    bpy.context.scene.unit_settings.scale_length = .01
+    bpy.context.scene.unit_settings.scale_length = scale
 
     for file in source_dir.iterdir():
         if not file.is_file():
@@ -367,7 +382,7 @@ def process_batch(src_dir, dst_dir, templ_path, hips_to_root, use_x, use_y, use_
         act_name = file.stem.replace(' ', '_')
 
         # Bake
-        bake_bones(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground)
+        bake_bones(src_armature, dst_armature, act_name, cbones, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground)
         
         bpy.ops.object.select_all(action='SELECT')
         dst_armature.select_set(False)
@@ -395,7 +410,7 @@ def process_batch(src_dir, dst_dir, templ_path, hips_to_root, use_x, use_y, use_
         output_file = dst_dir.joinpath(file.stem + ".fbx")
         bpy.ops.export_scene.fbx(filepath=str(output_file),
                                  use_selection=False,
-                                 apply_unit_scale=False,
+                                 apply_unit_scale=True,
                                  add_leaf_bones=False,
                                  axis_forward='-Z',
                                  axis_up='Y',

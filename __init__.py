@@ -45,10 +45,20 @@ class MixamoBakerPreferences(bpy.types.AddonPreferences):
         name="Transfer Rotation",
         description="Whether to transfer roation to root motion. Should be enabled for curve walking animations. Can be disabled for straight animations with strong hip Motion like Rolling",
         default=True)
+    scale: bpy.props.FloatProperty(
+        name="Unit Scale",
+        description="Unit Scale down the Rig by this factor",
+        default=0.01)
     sk_path: StringProperty(
         name="Skeleton Template",
         subtype='FILE_PATH',
     )
+    sk_cbones: StringProperty(
+        name="Constrained Bones",
+        default="wrist_r wrist_l",
+        subtype='FILE_PATH',
+    )
+
     inpath: StringProperty(
         name="Input Dir",
         subtype='DIR_PATH',
@@ -62,9 +72,7 @@ class MixamoBakerPreferences(bpy.types.AddonPreferences):
         layout = self.layout
         box = layout.box()
         box.row().prop(self, "sk_path")
-        box.row().prop(self, "hips_to_root")
-        box.row().prop(self, "inpath")
-        box.row().prop(self, "outpath")
+        box.row().prop(self, "sk_cbones")
 
 
 class OBJECT_OT_RenameToMixamo(bpy.types.Operator):
@@ -107,9 +115,10 @@ class OBJECT_OT_BatchBake(bpy.types.Operator):
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
         numfiles = mixamo_baker.process_batch(addon_prefs.inpath, addon_prefs.outpath, 
-                                              addon_prefs.sk_path, addon_prefs.hips_to_root,
+                                              addon_prefs.sk_path, addon_prefs.sk_cbones, addon_prefs.hips_to_root,
                                               addon_prefs.use_x, addon_prefs.use_y, addon_prefs.use_z, 
-                                              addon_prefs.use_rotation, addon_prefs.on_ground)
+                                              addon_prefs.use_rotation, addon_prefs.on_ground, 
+                                              addon_prefs.scale)
         if numfiles == -1:
             self.report({'ERROR_INVALID_INPUT'}, 'Error: Not all files could be converted, look in console for more information')
             return{ 'CANCELLED'}
@@ -132,6 +141,7 @@ class MIXAMOBAKER_VIEW_3D_PT_panel(bpy.types.Panel):
         box = layout.box()
         # Options for how to do the conversion
         box.row().prop(addon_prefs, "sk_path")
+        box.row().prop(addon_prefs, "sk_cbones")
         box.row().prop(addon_prefs, "hips_to_root")
         box.row().prop(addon_prefs, "inpath")
         box.row().prop(addon_prefs, "outpath")
@@ -149,6 +159,8 @@ class MIXAMOBAKER_VIEW_3D_PT_panel(bpy.types.Panel):
         row = box.row()
         if addon_prefs.use_z:
             col.prop(addon_prefs, "on_ground", toggle =True)
+        row = box.row()
+        col.prop(addon_prefs, "scale")
 
         box.row().operator("mixamo_baker.bake")
 
