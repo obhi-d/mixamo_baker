@@ -25,6 +25,26 @@ class MixamoBakerPreferences(bpy.types.AddonPreferences):
     hips_to_root: bpy.props.BoolProperty(
         name="Bake Hips To Root",
         default=True)
+    use_x: bpy.props.BoolProperty(
+        name="Use X",
+        description="If enabled, Horizontal motion is transfered to RootBone",
+        default=True)
+    use_y: bpy.props.BoolProperty(
+        name="Use Y",
+        description="If enabled, Horizontal motion is transfered to RootBone",
+        default=True)
+    use_z: bpy.props.BoolProperty(
+        name="Use Z",
+        description="If enabled, vertical motion is transfered to RootBone",
+        default=True)
+    on_ground: bpy.props.BoolProperty(
+        name="On Ground",
+        description="If enabled, root bone is on ground and only moves up at jumps",
+        default=True)
+    use_rotation: bpy.props.BoolProperty(
+        name="Transfer Rotation",
+        description="Whether to transfer roation to root motion. Should be enabled for curve walking animations. Can be disabled for straight animations with strong hip Motion like Rolling",
+        default=True)
     sk_path: StringProperty(
         name="Skeleton Template",
         subtype='FILE_PATH',
@@ -86,7 +106,10 @@ class OBJECT_OT_BatchBake(bpy.types.Operator):
     def execute(self, context):
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
-        numfiles = mixamo_baker.process_batch(addon_prefs.inpath, addon_prefs.outpath, addon_prefs.sk_path, addon_prefs.hips_to_root)
+        numfiles = mixamo_baker.process_batch(addon_prefs.inpath, addon_prefs.outpath, 
+                                              addon_prefs.sk_path, addon_prefs.hips_to_root,
+                                              addon_prefs.use_x, addon_prefs.use_y, addon_prefs.use_z, 
+                                              addon_prefs.use_rotation, addon_prefs.on_ground)
         if numfiles == -1:
             self.report({'ERROR_INVALID_INPUT'}, 'Error: Not all files could be converted, look in console for more information')
             return{ 'CANCELLED'}
@@ -114,6 +137,19 @@ class MIXAMOBAKER_VIEW_3D_PT_panel(bpy.types.Panel):
         box.row().prop(addon_prefs, "outpath")
         box.row().operator("mixamo_baker.rename_to_mixamo")
         box.row().operator("mixamo_baker.rename_to_unreal")
+
+        box = layout.box()
+        split = box.split()
+        col = split.column(align =True)
+        col.prop(addon_prefs, "use_x", toggle =True)
+        col.prop(addon_prefs, "use_y", toggle =True)
+        col.prop(addon_prefs, "use_z", toggle =True)
+        row = box.row()
+        col.prop(addon_prefs, "use_rotation", toggle =True)
+        row = box.row()
+        if addon_prefs.use_z:
+            col.prop(addon_prefs, "on_ground", toggle =True)
+
         box.row().operator("mixamo_baker.bake")
 
 classes = (

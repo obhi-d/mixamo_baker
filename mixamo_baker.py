@@ -93,6 +93,46 @@ def rename_to_mixamo(s):
             else:
                 rename_bone(s, [value], name)
 
+def get_all_quaternion_curves(object):
+    """returns all quaternion fcurves of object/bones packed together in a touple per object/bone"""
+    fcurves = object.animation_data.action.fcurves
+    if fcurves.find('rotation_quaternion'):
+        yield (fcurves.find('rotation_quaternion', index=0), fcurves.find('rotation_quaternion', index=1), fcurves.find('rotation_quaternion', index=2), fcurves.find('rotation_quaternion', index=3))
+    if object.type == 'ARMATURE':
+        for bone in object.pose.bones:
+            data_path = 'pose.bones["' + bone.name + '"].rotation_quaternion'
+            if fcurves.find(data_path):
+                yield (fcurves.find(data_path, index=0), fcurves.find(data_path, index=1),fcurves.find(data_path, index=2),fcurves.find(data_path, index=3))
+
+def quaternion_cleanup(object, prevent_flips=True, prevent_inverts=True):
+    """fixes signs in quaternion fcurves swapping from one frame to another"""
+    for curves in get_all_quaternion_curves(object):
+        start = int(min((curves[i].keyframe_points[0].co.x for i in range(4))))
+        end = int(max((curves[i].keyframe_points[-1].co.x for i in range(4))))
+        for curve in curves:
+            for i in range(start, end):
+                curve.keyframe_points.insert(i, curve.evaluate(i)).interpolation = 'LINEAR'
+        zipped = list(zip(
+            curves[0].keyframe_points,
+            curves[1].keyframe_points,
+            curves[2].keyframe_points,
+            curves[3].keyframe_points))
+        for i in range(1, len(zipped)):
+            if prevent_flips:
+                rot_prev = Quaternion((zipped[i-1][j].co.y for j in range(4)))
+                rot_cur = Quaternion((zipped[i][j].co.y for j in range(4)))
+                diff = rot_prev.rotation_difference(rot_cur)
+                if abs(diff.angle - pi) < 0.5:
+                    rot_cur.rotate(Quaternion(diff.axis, pi))
+                    for j in range(4):
+                        zipped[i][j].co.y = rot_cur[j]
+            if prevent_inverts:
+                change_amount = 0.0
+                for j in range(4):
+                    change_amount += abs(zipped[i-1][j].co.y - zipped[i][j].co.y)
+                if change_amount > 1.0:
+                    for j in range(4):
+                        zipped[i][j].co.y *= -1.0
 
 def rename_bone(s, names, dst):
     for name in names:
@@ -100,62 +140,111 @@ def rename_bone(s, names, dst):
         if bone:
             bone.name = dst
     
-
-def bake_bones(src_armature, dst_armature, act_name, hips_to_root):
-
-    frame_range = src_armature.animation_data.action.frame_range
-
+def bake_hips(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground, framerange):
+    
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.select_all(action='DESELECT')
     dst_armature.select_set(True)
     bpy.context.view_layer.objects.active = dst_armature
-        
+
+    hips = None
+    for hipname in ('Hips', 'mixamorig:Hips', 'mixamorig_Hips', 'pelvis'):
+        hips = src_armature.pose.bones.get(hipname)
+        if hips != None:
+            break
+
+    if hips == None:
+        log.warning('WARNING I have not found any hip bone for %s and the conversion is stopping here',  root.pose.bones)
+        raise ValueError("no hips found")
+
+    hiplocation_world = src_armature.matrix_local @ hips.bone.head
+    z_offset = hiplocation_world[2]
+
     if hips_to_root:
-        hips = None
-        for hipname in ('Hips', 'mixamorig:Hips', 'mixamorig_Hips', 'pelvis'):
-            hips = src_armature.pose.bones.get(hipname)
-            if hips != None:
-                break
+        bpy.ops.object.mode_set(mode='OBJECT')
+        dst_armature.rotation_mode = 'QUATERNION'
 
-        if hips == None:
-            log.warning('WARNING I have not found any hip bone for %s and the conversion is stopping here',  root.pose.bones)
-            raise ValueError("no hips found")
-        
-        c = dst_armature.constraints.new(type='COPY_TRANSFORMS')
-        c.target = dst_armature
-        c.subtarget = hips.name
-        bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
-                     clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'OBJECT'})
+        if use_z:        
+            c_rootbaker_copy_z_loc = dst_armature.constraints.new(type='COPY_LOCATION')
+            c_rootbaker_copy_z_loc.target = src_armature
+            c_rootbaker_copy_z_loc.subtarget = hips.name
+            c_rootbaker_copy_z_loc.use_x = False
+            c_rootbaker_copy_z_loc.use_y = False
+            c_rootbaker_copy_z_loc.use_z = True
+            c_rootbaker_copy_z_loc.use_offset = True
+            if on_ground:
+                dst_armature.location[2] = -z_offset
+                c_on_ground = dst_armature.constraints.new(type='LIMIT_LOCATION')
+                c_on_ground.name = "On Ground"
+                c_on_ground.use_min_z = True
 
+        c_rootbaker_copy_loc = dst_armature.constraints.new(type='COPY_LOCATION')
+        c_rootbaker_copy_loc.use_x = use_x
+        c_rootbaker_copy_loc.use_y = use_y
+        c_rootbaker_copy_loc.use_z = False
+        c_rootbaker_copy_loc.target = src_armature
+        c_rootbaker_copy_loc.subtarget = hips.name
+
+        c_rootbaker_copy_rot = dst_armature.constraints.new(type='COPY_ROTATION')
+        c_rootbaker_copy_rot.target = src_armature
+        c_rootbaker_copy_rot.subtarget = hips.name
+        c_rootbaker_copy_rot.use_y = False
+        c_rootbaker_copy_rot.use_x = False
+        c_rootbaker_copy_rot.use_z = use_rotation
+               
+        bpy.ops.object.select_all(action='DESELECT')
+        dst_armature.select_set(True)
+        bpy.context.view_layer.objects.active = dst_armature
+        bpy.ops.nla.bake(frame_start=framerange[0], frame_end=framerange[1], step=1, only_selected=True, visual_keying=True,
+                         clear_constraints=True, clear_parents=False, use_current_action=False, bake_types={'OBJECT'})
+                
+
+def bake_bones(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground):
+
+    frame_range = src_armature.animation_data.action.frame_range
+    
+    bake_hips(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground, frame_range)
+    
     bpy.ops.object.mode_set(mode='POSE')
-
     process_later = []
+
     for dst in dst_armature.pose.bones:
         src = src_armature.pose.bones.get(dst.name)
         if src:
             dst.bone.select = True
             dst_armature.data.bones.active = dst.bone
-            c = dst.constraints.new(type='COPY_TRANSFORMS')
+            dst.rotation_mode = 'QUATERNION'
+            c = dst.constraints.new(type='COPY_LOCATION')
             c.target = src_armature
             c.subtarget = src.name
+
+            c = dst.constraints.new(type='COPY_ROTATION')
+            c.target = src_armature
+            c.subtarget = src.name
+
             bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
-                     clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'POSE'})
+                        clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'POSE'})
+            
             dst.bone.select = False
         elif dst.bone.use_deform:
             process_later.append(dst)
 
     for dst in process_later:
         dst.bone.select = True
+        dst.rotation_mode = 'QUATERNION'
         dst_armature.data.bones.active = dst.bone
         bpy.ops.nla.bake(frame_start=frame_range[0], frame_end=frame_range[1], step=1, only_selected=True, visual_keying=True,
                      clear_constraints=True, clear_parents=False, use_current_action=True, bake_types={'POSE'})
         dst.bone.select = False
+
 
     bpy.ops.object.mode_set(mode='OBJECT')
     dst_armature.select_set(True)
     bpy.context.view_layer.objects.active = dst_armature
     dst_armature.animation_data.action.name = act_name
     
+    quaternion_cleanup(dst_armature)
+
 def clear_keyframes(dst_armature):
     
     bpy.ops.object.select_all(action='DESELECT')
@@ -202,7 +291,7 @@ def get_src_armature():
         if obj.type == 'ARMATURE':
             return obj
 
-def process_batch(src_dir, dst_dir, templ_path, hips_to_root):
+def process_batch(src_dir, dst_dir, templ_path, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground):
 
     source_dir = Path(src_dir)
 
@@ -278,7 +367,7 @@ def process_batch(src_dir, dst_dir, templ_path, hips_to_root):
         act_name = file.stem.replace(' ', '_')
 
         # Bake
-        bake_bones(src_armature, dst_armature, act_name, hips_to_root)
+        bake_bones(src_armature, dst_armature, act_name, hips_to_root, use_x, use_y, use_z, use_rotation, on_ground)
         
         bpy.ops.object.select_all(action='SELECT')
         dst_armature.select_set(False)
@@ -300,6 +389,7 @@ def process_batch(src_dir, dst_dir, templ_path, hips_to_root):
                 bpy.data.armatures.remove(armature, do_unlink=True)
                    
         clear_keyframes(dst_armature)
+
         # Export
         dst_dir = Path(dst_dir)
         output_file = dst_dir.joinpath(file.stem + ".fbx")
