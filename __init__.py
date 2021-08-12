@@ -2,7 +2,7 @@
 bl_info = {
     "name": "Mixamo Animation Baker",
     "author": "Abhishek Dey",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (2, 80, 0),
     "location": "3D View > UI (Right Panel) > Mixamo Animation Tab",
     "description": ("Script to import Mixamo Animations into Armature for UE export"),
@@ -56,7 +56,8 @@ class MixamoBakerPreferences(bpy.types.AddonPreferences):
     sk_cbones: StringProperty(
         name="Constrained Bones",
         default="wrist_r wrist_l",
-        subtype='FILE_PATH',
+        description="Space separated bone names which are constrained and not keyframe animated",
+        subtype='NONE',
     )
 
     inpath: StringProperty(
