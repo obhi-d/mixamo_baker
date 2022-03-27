@@ -3,7 +3,7 @@ bl_info = {
     "name": "Mixamo Animation Baker",
     "author": "Abhishek Dey",
     "version": (1, 0, 1),
-    "blender": (2, 80, 0),
+    "blender": (3, 0, 0),
     "location": "3D View > UI (Right Panel) > Mixamo Animation Tab",
     "description": ("Script to import Mixamo Animations into Armature for UE export"),
     "warning": "",  # used for warning icon and text in addons panel
